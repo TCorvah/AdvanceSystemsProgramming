@@ -1,0 +1,213 @@
+
+error.o:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000000 <ltmp0>:
+       0: d10083ff     	sub	sp, sp, #32
+       4: a9017bfd     	stp	x29, x30, [sp, #16]
+       8: 910043fd     	add	x29, sp, #16
+       c: f90007e0     	str	x0, [sp, #8]
+      10: 910003e9     	mov	x9, sp
+      14: 910043a8     	add	x8, x29, #16
+      18: f9000128     	str	x8, [x9]
+      1c: 94000000     	bl	0x1c <ltmp0+0x1c>
+      20: b9400001     	ldr	w1, [x0]
+      24: f94007e2     	ldr	x2, [sp, #8]
+      28: f94003e3     	ldr	x3, [sp]
+      2c: 52800020     	mov	w0, #1
+      30: 94000000     	bl	0x30 <ltmp0+0x30>
+      34: a9417bfd     	ldp	x29, x30, [sp, #16]
+      38: 910083ff     	add	sp, sp, #32
+      3c: d65f03c0     	ret
+
+0000000000000040 <_err_doit>:
+      40: a9be6ffc     	stp	x28, x27, [sp, #-32]!
+      44: a9017bfd     	stp	x29, x30, [sp, #16]
+      48: 910043fd     	add	x29, sp, #16
+      4c: 52820a09     	mov	w9, #4176
+      50: 90000010     	adrp	x16, 0x0 <_err_doit+0x10>
+      54: f9400210     	ldr	x16, [x16]
+      58: d63f0200     	blr	x16
+      5c: d14007ff     	sub	sp, sp, #1, lsl #12     ; =4096
+      60: d10143ff     	sub	sp, sp, #80
+      64: 90000008     	adrp	x8, 0x0 <_err_doit+0x24>
+      68: f9400108     	ldr	x8, [x8]
+      6c: f9400108     	ldr	x8, [x8]
+      70: f81e83a8     	stur	x8, [x29, #-24]
+      74: b90047e0     	str	w0, [sp, #68]
+      78: b90043e1     	str	w1, [sp, #64]
+      7c: f9001fe2     	str	x2, [sp, #56]
+      80: f9001be3     	str	x3, [sp, #48]
+      84: f9401fe4     	ldr	x4, [sp, #56]
+      88: f9401be5     	ldr	x5, [sp, #48]
+      8c: 910123e0     	add	x0, sp, #72
+      90: d281ffe1     	mov	x1, #4095
+      94: 52800002     	mov	w2, #0
+      98: d2820003     	mov	x3, #4096
+      9c: 94000000     	bl	0x9c <_err_doit+0x5c>
+      a0: b94047e8     	ldr	w8, [sp, #68]
+      a4: 71000108     	subs	w8, w8, #0
+      a8: 1a9f17e8     	cset	w8, eq
+      ac: 37000388     	tbnz	w8, #0, 0x11c <_err_doit+0xdc>
+      b0: 14000001     	b	0xb4 <_err_doit+0x74>
+      b4: 910123e0     	add	x0, sp, #72
+      b8: f9000fe0     	str	x0, [sp, #24]
+      bc: 94000000     	bl	0xbc <_err_doit+0x7c>
+      c0: aa0003e9     	mov	x9, x0
+      c4: f9400fe0     	ldr	x0, [sp, #24]
+      c8: aa0003e8     	mov	x8, x0
+      cc: 8b090108     	add	x8, x8, x9
+      d0: f90017e8     	str	x8, [sp, #40]
+      d4: 94000000     	bl	0xd4 <_err_doit+0x94>
+      d8: d2820008     	mov	x8, #4096
+      dc: eb000108     	subs	x8, x8, x0
+      e0: f1000508     	subs	x8, x8, #1
+      e4: f90013e8     	str	x8, [sp, #32]
+      e8: b94043e0     	ldr	w0, [sp, #64]
+      ec: 94000000     	bl	0xec <_err_doit+0xac>
+      f0: f94013e1     	ldr	x1, [sp, #32]
+      f4: aa0003e8     	mov	x8, x0
+      f8: f94017e0     	ldr	x0, [sp, #40]
+      fc: 910003e9     	mov	x9, sp
+     100: f9000128     	str	x8, [x9]
+     104: 52800002     	mov	w2, #0
+     108: 92800003     	mov	x3, #-1
+     10c: 90000004     	adrp	x4, 0x0 <_err_doit+0xcc>
+     110: 91000084     	add	x4, x4, #0
+     114: 94000000     	bl	0x114 <_err_doit+0xd4>
+     118: 14000001     	b	0x11c <_err_doit+0xdc>
+     11c: 910123e0     	add	x0, sp, #72
+     120: f9000be0     	str	x0, [sp, #16]
+     124: 90000001     	adrp	x1, 0x0 <_err_doit+0xe4>
+     128: 91000021     	add	x1, x1, #0
+     12c: d2820002     	mov	x2, #4096
+     130: 94000000     	bl	0x130 <_err_doit+0xf0>
+     134: 90000008     	adrp	x8, 0x0 <_err_doit+0xf4>
+     138: f9400108     	ldr	x8, [x8]
+     13c: f9400100     	ldr	x0, [x8]
+     140: 94000000     	bl	0x140 <_err_doit+0x100>
+     144: f9400be0     	ldr	x0, [sp, #16]
+     148: 90000008     	adrp	x8, 0x0 <_err_doit+0x108>
+     14c: f9400108     	ldr	x8, [x8]
+     150: f9400101     	ldr	x1, [x8]
+     154: 94000000     	bl	0x154 <_err_doit+0x114>
+     158: d2800000     	mov	x0, #0
+     15c: 94000000     	bl	0x15c <_err_doit+0x11c>
+     160: f85e83a9     	ldur	x9, [x29, #-24]
+     164: 90000008     	adrp	x8, 0x0 <_err_doit+0x124>
+     168: f9400108     	ldr	x8, [x8]
+     16c: f9400108     	ldr	x8, [x8]
+     170: eb090108     	subs	x8, x8, x9
+     174: 1a9f17e8     	cset	w8, eq
+     178: 37000068     	tbnz	w8, #0, 0x184 <_err_doit+0x144>
+     17c: 14000001     	b	0x180 <_err_doit+0x140>
+     180: 94000000     	bl	0x180 <_err_doit+0x140>
+     184: 914007ff     	add	sp, sp, #1, lsl #12     ; =4096
+     188: 910143ff     	add	sp, sp, #80
+     18c: a9417bfd     	ldp	x29, x30, [sp, #16]
+     190: a8c26ffc     	ldp	x28, x27, [sp], #32
+     194: d65f03c0     	ret
+
+0000000000000198 <_err_sys>:
+     198: d100c3ff     	sub	sp, sp, #48
+     19c: a9027bfd     	stp	x29, x30, [sp, #32]
+     1a0: 910083fd     	add	x29, sp, #32
+     1a4: f81f83a0     	stur	x0, [x29, #-8]
+     1a8: 910043e9     	add	x9, sp, #16
+     1ac: 910043a8     	add	x8, x29, #16
+     1b0: f9000128     	str	x8, [x9]
+     1b4: 94000000     	bl	0x1b4 <_err_sys+0x1c>
+     1b8: b9400001     	ldr	w1, [x0]
+     1bc: f85f83a2     	ldur	x2, [x29, #-8]
+     1c0: f9400be3     	ldr	x3, [sp, #16]
+     1c4: 52800020     	mov	w0, #1
+     1c8: b9000fe0     	str	w0, [sp, #12]
+     1cc: 94000000     	bl	0x1cc <_err_sys+0x34>
+     1d0: b9400fe0     	ldr	w0, [sp, #12]
+     1d4: 94000000     	bl	0x1d4 <_err_sys+0x3c>
+
+00000000000001d8 <_err_cont>:
+     1d8: d100c3ff     	sub	sp, sp, #48
+     1dc: a9027bfd     	stp	x29, x30, [sp, #32]
+     1e0: 910083fd     	add	x29, sp, #32
+     1e4: b81fc3a0     	stur	w0, [x29, #-4]
+     1e8: f9000be1     	str	x1, [sp, #16]
+     1ec: 910023e9     	add	x9, sp, #8
+     1f0: 910043a8     	add	x8, x29, #16
+     1f4: f9000128     	str	x8, [x9]
+     1f8: b85fc3a1     	ldur	w1, [x29, #-4]
+     1fc: f9400be2     	ldr	x2, [sp, #16]
+     200: f94007e3     	ldr	x3, [sp, #8]
+     204: 52800020     	mov	w0, #1
+     208: 94000000     	bl	0x208 <_err_cont+0x30>
+     20c: a9427bfd     	ldp	x29, x30, [sp, #32]
+     210: 9100c3ff     	add	sp, sp, #48
+     214: d65f03c0     	ret
+
+0000000000000218 <_err_exit>:
+     218: d100c3ff     	sub	sp, sp, #48
+     21c: a9027bfd     	stp	x29, x30, [sp, #32]
+     220: 910083fd     	add	x29, sp, #32
+     224: b81fc3a0     	stur	w0, [x29, #-4]
+     228: f9000be1     	str	x1, [sp, #16]
+     22c: 910023e9     	add	x9, sp, #8
+     230: 910043a8     	add	x8, x29, #16
+     234: f9000128     	str	x8, [x9]
+     238: b85fc3a1     	ldur	w1, [x29, #-4]
+     23c: f9400be2     	ldr	x2, [sp, #16]
+     240: f94007e3     	ldr	x3, [sp, #8]
+     244: 52800020     	mov	w0, #1
+     248: b90007e0     	str	w0, [sp, #4]
+     24c: 94000000     	bl	0x24c <_err_exit+0x34>
+     250: b94007e0     	ldr	w0, [sp, #4]
+     254: 94000000     	bl	0x254 <_err_exit+0x3c>
+
+0000000000000258 <_err_dump>:
+     258: d10083ff     	sub	sp, sp, #32
+     25c: a9017bfd     	stp	x29, x30, [sp, #16]
+     260: 910043fd     	add	x29, sp, #16
+     264: f90007e0     	str	x0, [sp, #8]
+     268: 910003e9     	mov	x9, sp
+     26c: 910043a8     	add	x8, x29, #16
+     270: f9000128     	str	x8, [x9]
+     274: 94000000     	bl	0x274 <_err_dump+0x1c>
+     278: b9400001     	ldr	w1, [x0]
+     27c: f94007e2     	ldr	x2, [sp, #8]
+     280: f94003e3     	ldr	x3, [sp]
+     284: 52800020     	mov	w0, #1
+     288: 94000000     	bl	0x288 <_err_dump+0x30>
+     28c: 94000000     	bl	0x28c <_err_dump+0x34>
+
+0000000000000290 <_err_msg>:
+     290: d10083ff     	sub	sp, sp, #32
+     294: a9017bfd     	stp	x29, x30, [sp, #16]
+     298: 910043fd     	add	x29, sp, #16
+     29c: f90007e0     	str	x0, [sp, #8]
+     2a0: 910003e9     	mov	x9, sp
+     2a4: 910043a8     	add	x8, x29, #16
+     2a8: f9000128     	str	x8, [x9]
+     2ac: f94007e2     	ldr	x2, [sp, #8]
+     2b0: f94003e3     	ldr	x3, [sp]
+     2b4: 52800001     	mov	w1, #0
+     2b8: aa0103e0     	mov	x0, x1
+     2bc: 94000000     	bl	0x2bc <_err_msg+0x2c>
+     2c0: a9417bfd     	ldp	x29, x30, [sp, #16]
+     2c4: 910083ff     	add	sp, sp, #32
+     2c8: d65f03c0     	ret
+
+00000000000002cc <_err_quit>:
+     2cc: d10083ff     	sub	sp, sp, #32
+     2d0: a9017bfd     	stp	x29, x30, [sp, #16]
+     2d4: 910043fd     	add	x29, sp, #16
+     2d8: f90007e0     	str	x0, [sp, #8]
+     2dc: 910003e9     	mov	x9, sp
+     2e0: 910043a8     	add	x8, x29, #16
+     2e4: f9000128     	str	x8, [x9]
+     2e8: f94007e2     	ldr	x2, [sp, #8]
+     2ec: f94003e3     	ldr	x3, [sp]
+     2f0: 52800001     	mov	w1, #0
+     2f4: aa0103e0     	mov	x0, x1
+     2f8: 94000000     	bl	0x2f8 <_err_quit+0x2c>
+     2fc: 52800020     	mov	w0, #1
+     300: 94000000     	bl	0x300 <_err_quit+0x34>

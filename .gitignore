@@ -1,0 +1,7 @@
+Advance-Systems-Programming-Project-COMS4995/*
+*.plist
+*.dSYM
+hw5-14-The_Allocators/*
+*.Systems*.o
+Resources/*
+IGNORE/*

@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <limits.h>
-#include <dirent.h>
 #include <stdarg.h>
 #include <fcntl.h>
 
@@ -51,11 +50,11 @@ static int myfunc(const char *pathname, const char *pattern, const struct stat *
 {    
     switch (type) {
     case REGULAR_FILE:
-        switch (statptr->st_mode  & __S_IFMT){
-        case __S_IFREG:
+        switch (statptr->st_mode  & S_IFMT){
+        case S_IFREG:
             nreg++;
             break;
-        case __S_IFDIR:
+        case S_IFDIR:
             printf("wrong type for directory %s", pathname);
         }    
         break;     
@@ -157,6 +156,7 @@ int helper_func(char *path, char *pattern) {
         return(ret);
  
     n = strlen(fullpath);
+
     fullpath[n++] = '/';
     if ((dp = opendir(fullpath)) == NULL)   /* can’t read directory */
         return(EXIT_FAILURE);
