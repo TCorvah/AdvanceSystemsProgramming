@@ -4,22 +4,37 @@
 #include <stdint.h>
 #include <assert.h>
 #include<inttypes.h>
+#include <stddef.h>
 
 #include "mm.h"
 #include "../libmem/mem.h"
 
 
 /*
- * Simple, 64-bit clean allocator based on implicit free
- * lists, first-fit placement, and boundary tag coalescing, as described
- * in the CS:APP3e text. Blocks must be aligned to doubleword (16 byte)
- * boundaries. Minimum block size is 32 bytes.
+ * Implicit Free List Memory Allocator
+ * 
+ * This implementation manages memory using an implicit free list with:
+ * - First-fit placement strategy
+ * - Boundary tag coalescing for adjacent free blocks
+ * - 16-byte alignment for payloads
+ * - Minimum block size of 32 bytes (header, footer, and alignment padding)
+ *
+ * Key Features:
+ * - Header and footer include size (60 bits) and allocation status (1 bit).
+ * - Blocks are coalesced when freed to reduce fragmentation.
+ * - Memory is extended as needed using `mem_sbrk`.
  */
 
-#define WSIZE       8       /* Word and header/footer size (bytes) */
-#define DWORD_SIZE   16
-#define CHUNKSIZE  4096  /* Extend heap by this amount (bytes) */
 
+#define WSIZE       8       /* Word and header/footer size (bytes) */
+#define DWORD_SIZE  16      /* Double-word size (bytes) */
+#define CHUNKSIZE   4096    /* Extend heap by this amount (bytes) */
+
+/*
+ * Block Header and Footer Structures:
+ * - `size`: Block size in bytes (60 bits).
+ * - `allocated`: Allocation status (1 bit: 0 = free, 1 = allocated).
+ */
 typedef struct {
    // Note that this diverges from CSAPP's header semantics. Here, the size
    // field stores the full block size in bytes using 60 bits. This is more
@@ -44,37 +59,47 @@ typedef struct {
 static inline int MAX(int x, int y) {
     return (x > y) ? x : y;
 }
-
-
-
-/* this computes the address of the header */
+/* Helper function prototypes */
+static inline header_t *header(void *payload);
+static inline footer_t *footer(void *payload);
+static inline void *next_payload(void *payload);
+static inline void *prev_payload(void *payload);
+/*
+ * Header: Returns a pointer to the header of the block containing current `payload`.
+ */
 static inline header_t *header(void *payload) {
     // Implement this function
      header_t * hdr_addr = (header_t *)((char *)payload - WSIZE);
      return hdr_addr;
-}
-static inline footer_t *footer(void *payload) {
-    // Implement this function
-    footer_t *ftr_addr = (footer_t *)((char *)payload + header(payload)->size - DWORD_SIZE);
-    return ftr_addr;
+     
 }
 
+/*
+ * Footer: Returns a pointer to the footer of the block containing  current `payload`.
+ */
+static inline footer_t *footer(void *payload) {
+    footer_t *ftr_addr = (footer_t *)((char *)payload + header(payload)->size - DWORD_SIZE);
+    return ftr_addr;
+   
+}
+/*
+ * Next Payload: Returns a pointer to the payload of the next block.
+ */
 static inline void *next_payload(void *payload) {
-    // Implement this function
     char *p = (char*)payload + header(payload)->size;
     return p; 
 }
 
 /* The following function takes you to the previous payload in the heap */
 static inline void *prev_payload(void *payload) {
-    // get the total size of the current pointer
     footer_t *prev_ftr = (footer_t *)((char *)header(payload) - DWORD_SIZE);
     size_t block_size = prev_ftr->size;
     char *p = (char *)payload - block_size;
     return p;
 }
-/* Global variables */
-static char *heap_listp = 0;  /* Pointer to first block */
+
+/* Global pointer to the start of the heap */
+static char *heap_listp = 0;  
 
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
@@ -94,7 +119,7 @@ void mm_init(void)
     assert(sizeof(header_t) == WSIZE);
 
     assert(sizeof(footer_t) == WSIZE);
-
+    
   
     
     mem_init();
@@ -104,36 +129,33 @@ void mm_init(void)
         perror("mem_sbrk");
         exit(1);
     }
-      // For debugging purposes, print the allocation details.
-    printf("pointer address to initial empty heap: %p bytes\n", heap_listp);
       // 8-byte leading padding
     memset(heap_listp, 0, WSIZE);
- 
+
+    printf("heap list current address: %p bytes\n", heap_listp);
+
+    // a bug is detected in the mm_init logic for the prologue and epilogue block address
     heap_listp += DWORD_SIZE;
-
-    printf("pointer before prologue header: %p bytes\n", heap_listp);
-
-   // Set up prologue block (header + footer)
-    header(heap_listp);
-    header(heap_listp)->size= DWORD_SIZE;
+    header(heap_listp)->size = DWORD_SIZE;
     header(heap_listp)->allocated = 1;
-    printf("After prologue header, heap_listp: %p\n", heap_listp);
-    //printf("Prologue header size: [%ld:%c]\n", (long)prologue_header->size, (prologue_header->allocated ? 'a' : 'f'));
-    //had to advance the heap list pointer by DWORD Size before I see output
-
-    //partially fix alignment. change the structure of layout
-    footer(heap_listp);
+    printf("Prologue header address: %p\n", header(heap_listp));
+    
+    // My understanding is that the pointer should be incremented by a word size
+    //for the prologue header and a word size for the prologue footer
+    // so 16 byte total
+    heap_listp += DWORD_SIZE;
     footer(heap_listp)->size = DWORD_SIZE;
     footer(heap_listp)->allocated = 1;
-    printf("After prologue footer, heap_listp: %p\n", heap_listp);
-        
-    heap_listp += DWORD_SIZE;
+    printf("Prologue footer address: %p\n", footer(heap_listp));
 
     // Initialize epilogue
-    header_t *epilogue_header = header(heap_listp);
-    epilogue_header->size = 0;
-    epilogue_header->allocated = 1;
-    printf("After epilogue header, heap_listp: %p\n", heap_listp);
+    //epilogue header sometimes has alignment issues that could be from the coalesce function
+    // or the extend heap.
+    //the epilogue should be at the end of the heap,
+    header(heap_listp);
+    header(heap_listp)->size = 0;
+    header(heap_listp)->allocated = 1;
+    printf("epilogue header address: %p\n", heap_listp);
     heap_listp -= DWORD_SIZE;
 
 
@@ -200,14 +222,12 @@ void mm_free(void *bp)
     }
    
     // free the header block with size intact, block is mark as free in header
-    header_t *header_bp = header(bp);
-    header_bp->size = block_size;
-    header_bp->allocated = 0;
+    header(bp)->size = block_size;
+    header(bp)->allocated = 0;
 
     // free the footer block with size intact
-    footer_t *footer_bp = footer(bp);
-    footer_bp->size = block_size;
-    footer_bp->allocated = 0;
+    footer(bp)->size = block_size;
+    footer(bp)->allocated = 0;
     
     // merge adjacent blocks into larger blocks to prevent external fragmentation
     coalesce(bp);
@@ -218,15 +238,14 @@ void mm_free(void *bp)
  */
 static void *coalesce(void *bp)
 {
-
     size_t prev_alloc = footer(prev_payload(bp))->allocated;
     size_t next_alloc = header(next_payload(bp))->allocated;
     size_t block_size = header(bp)->size;
     
-    if (prev_alloc && next_alloc) {            /* Case 1, no coalescing needed, blocks are not free */
+    if (prev_alloc == 1 && next_alloc == 1) {            /* Case 1, no coalescing needed, blocks are not free */
         return bp;
     }
-    else if (prev_alloc && !next_alloc) {      /* Case 2, coalesce, prev is not free but the next is free */
+    else if (prev_alloc == 1 && next_alloc == 0) {      /* Case 2, coalesce, prev is not free but the next is free */
         block_size += header(next_payload(bp))->size;
         header(bp)->size = block_size;
         header(bp)->allocated = 0;
@@ -235,7 +254,7 @@ static void *coalesce(void *bp)
         footer(bp)->allocated = 0;
        
     }
-    else if (!prev_alloc && next_alloc) {      /* Case 3 , coalesce, prev is free but next is allocated*/
+    else if (prev_alloc == 0 && next_alloc == 1) {      /* Case 3 , coalesce, prev is free but next is allocated*/
         block_size +=  header(prev_payload(bp))->size;
         footer(bp)->size = block_size;
         footer(bp)->allocated = 0;
@@ -243,16 +262,16 @@ static void *coalesce(void *bp)
         header(prev_payload(bp))->size = block_size; 
         header(prev_payload(bp))->allocated = 0;  
         bp = prev_payload(bp);
-        footer(bp)->size = block_size;
-        footer(bp)->allocated = 0;
+
     }
     else {                                     /* Case 4 */
-        block_size += header(prev_payload(bp))->size +  footer(next_payload(bp))->size;
+        block_size += header(prev_payload(bp))->size + 
+        footer(next_payload(bp))->size;
         header(prev_payload(bp))->size = block_size;
         header(prev_payload(bp))->allocated = 0; 
 
         footer(next_payload(bp))->size = block_size;
-         footer(next_payload(bp))->allocated = 0;
+        footer(next_payload(bp))->allocated = 0;
         bp = prev_payload(bp);
     }
 
@@ -318,7 +337,7 @@ static void *extend_heap(size_t words)
 
     /* Allocate an even number of words to maintain alignment */
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-    if ((long)(bp = mem_sbrk(size)) == -1)
+    if ((bp = mem_sbrk(size)) == (void *)-1) 
         return NULL;
 
     /* Initialize free block header/footer and the epilogue header */
@@ -374,7 +393,7 @@ static void *find_fit(size_t asize)
     void *bp;
 
     for (bp = heap_listp; header(bp)->size > 0; bp = next_payload(bp)) {
-        if (!header(bp)->allocated && (asize <= header(bp)->size)) {
+        if (header(bp)->allocated == 0 && asize <= header(bp)->size) {
             return bp;
         }
     }
@@ -403,10 +422,14 @@ static void printblock(void *bp)
 
 static void checkblock(void *bp)
 {
-    if ((size_t)bp % 8)
+    if ((uintptr_t)bp % DWORD_SIZE)
         printf("Error: %p is not doubleword aligned\n", bp);
+
     if (header(bp)->size != footer(bp)->size)
         printf("Error: header does not match footer\n");
+
+    if (header(bp)->allocated == 1 && footer(bp)->allocated == 0)
+        printf("Error: header cannot be allocated and footer free or vice versa\n");
 }
 
 /*
@@ -415,13 +438,21 @@ static void checkblock(void *bp)
 void checkheap(int verbose)
 {
     char *bp = heap_listp;
-
+  
     if (verbose)
         printf("Heap (%p):\n", heap_listp);
 
-    if (((header(heap_listp)->size) != DWORD_SIZE) || !header(heap_listp)->allocated)
+    if (header(heap_listp)->size != DWORD_SIZE || 
+    header(heap_listp)->allocated == 0) {
         printf("Bad prologue header\n");
-    checkblock(heap_listp);
+     checkblock(heap_listp);
+    }
+     if (footer(heap_listp)->size != DWORD_SIZE || 
+    footer(heap_listp)->allocated == 0) {
+        printf("Bad prologue header\n");
+     checkblock(heap_listp);
+    }
+    
 
     for (bp = heap_listp; header(bp)->size > 0; bp = next_payload(bp)) {
         if (verbose)
@@ -431,6 +462,7 @@ void checkheap(int verbose)
 
     if (verbose)
         printblock(bp);
-    if ((header(bp)->size != 0) || !(header(bp)->allocated))
+    //epilogue header
+    if (header(bp)->size != 0 || header(bp)->allocated == 0)
         printf("Bad epilogue header\n");
 }
