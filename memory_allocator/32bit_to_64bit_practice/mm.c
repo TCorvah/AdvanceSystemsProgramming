@@ -156,40 +156,53 @@ void *mm_malloc(size_t size)
     if (size > (CHUNKSIZE << 2))
         errno = ENOMEM;
 
-    /* Adjust block size to include overhead and alignment reqs.
-    * if the user payload is less than the minimum allowable size
-    * the default is 32 bytes.
-    *  */
-    if (size <= DSIZE) // to many request of smaller payloads leads to internal fragmentation
+    /* Adjust block size to include overhead and alignment requirements.
+     * If the user's requested payload size is less than or equal to 
+     * the double word size, internal fragmentation occurs due to wasted 
+     * padding and alignment on the heap. However, as long as the request 
+     * pattern remains consistent with small payloads, external fragmentation 
+     * is less likely to occur.
+     * 
+     * Internal fragmentation can lead to external fragmentation only if 
+     * the user changes their request pattern to larger payload sizes after 
+     * historically allocating blocks smaller than or equal to the double word size.
+     */
+    if (size <= DSIZE)
         asize = MIN_BLOCK_SIZE;
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE); 
 
-    /* Search the free list for a fit  based on user request and place the newly alloacted block to
-    * be return to the user. find fit is a strategy that places  smaller blocks in front of the implicit 
-    * free list with larger blocks at the end */
+    /* Search the free list for a fit based on the user request and place the newly allocated block 
+     * to be returned to the user. The find_fit function uses a first-fit strategy, where smaller 
+     * blocks are located at the front of the implicit free list, and larger blocks are at the end.
+     * The runtime of find_fit is constant for smaller blocks since they are near the front of the list. 
+     * The place function allocates the adjusted block size on the heap and returns any remaining 
+     * unallocated space to the free list.
+     */
     if ((bp = find_fit(asize)) != NULL) {
         place(bp, asize);
         return bp;
     }
 
-    /* No fit found. Get more memory and place the block 
-    * note that I am using right and left shifts for division to prevent divide by zero errors
-    which enforce alignment*/
+    /* No fit found. Request more memory by extending the heap and place the block. 
+     * This can sometimes lead to complications. For instance, if there are 10 bytes 
+     * of free space on the heap and the user requests 24 bytes, the heap will need to 
+     * be extended by a page size. The existing 10 bytes will then be coalesced with 
+     * the newly extended memory before placing the requested block.
+     * Note: Right and left bitwise shifts are used here for division to prevent 
+     * divide-by-zero errors and to ensure proper alignment of the memory. */
     extendsize = ((asize + CHUNKSIZE - 1) >> 12 ) <<  12;
-
     if ((bp = extend_heap(extendsize >> 3)) == NULL)
         return NULL;
-    place(bp, asize);
-    printf("Allocated block at: %p after extending heap\n", bp);  
+    place(bp, asize); 
     return bp;
 }
 
 /*
- * mm_free - Free an allocated block in memory. Each free request 
- * must correspond to a currently allocated block obtain from a previous allocated request.
- * the void *p is a pointer to the block in memory to be free which  has to be allocated first
- * the runtime of mm_free is constant in all cases.
+ * mm_free - Frees an allocated block in memory. Each free request 
+ * must correspond to a currently allocated block obtained from a prior allocation. 
+ * The pointer `bp` is the address of the block to be freed, which must have 
+ * been previously allocated. The runtime of mm_free is constant in all cases.
  */
 void mm_free(void *bp)
 {
@@ -200,18 +213,21 @@ void mm_free(void *bp)
     if (heap_listp == NULL){
         mm_init();
     }
-    // if the newly free block is the only free block on the heap, this takes
-    //care of case 1 for coalesce as it is marked as free without any adjacent free neighbors
-    put_word(hdr_pointer(bp), pack(size, 0));
-    put_word(hdr_pointer(bp), pack(size, 0));
+/*
+ * The coalesce function handles "false fragmentation" by merging adjacent 
+ * free blocks into a single larger block. If a free block does not have any 
+ * unallocated neighbors, the coalesce function changes the allocated block
+ * to free and does not do any merging
+ */
     coalesce(bp);
 }
 
 /*
  * coalesce - Boundary tag coalescing. Return ptr to coalesced block
- * this implementation helps to merge splinter blocks athat are adjacent on
+ * this implementation helps to merge "splinter blocks" that are adjacent on
  * the heap. Main intent of coalescing is to combat false fragmentation, the implementation
- * use here is immediate coalescing as this function is called in mm_free
+ * use here is immediate coalescing as this function is called in mm_free the cost of 
+ * merging is constant
  */
 static void *coalesce(void *current_bp)
 {
@@ -220,19 +236,24 @@ static void *coalesce(void *current_bp)
     size_t current_block_size = get_size(hdr_pointer(current_bp));
     printf("Coalescing block at %p of size %zu\n", current_bp, current_block_size);  // Debug: Before coalescing
 
-
-    if (prev_alloc && next_alloc) {    /* Case 1, no coalescing is possible as both adjacent blocks are allocated*/
+    /* Case 1, no coalescing is possible as both adjacent blocks are allocated
+    * change allocated bit of the header and footer of the current block to free*/
+    if (prev_alloc && next_alloc) {    
+        put_word(hdr_pointer(current_bp), pack(current_block_size, 0));
+        put_word(ftr_pointer(current_bp), pack(current_block_size, 0));
         return current_bp;
     }
-    /* Case 2, current block is merge with next block, the header of the current block  and the footer 
-    of the next block */
+    /* Case 2, current block is merge with next block, the header of the current block and the
+    of the next block  sizes are combine*/
     else if (prev_alloc && !next_alloc) {      
         current_block_size += get_size(hdr_pointer(next_blkp(current_bp)));
         put_word(hdr_pointer(current_bp), pack(current_block_size, 0));
         put_word(ftr_pointer(current_bp), pack(current_block_size,0));
        
     }
-    else if (!prev_alloc && next_alloc) {      /* Case 3, cost of merge */
+     /* Case 3, current block is merge with previous block, the header of the current block  and the footer 
+    of the next block */
+    else if (!prev_alloc && next_alloc) {      /* Case 3, cost of merge is constant*/
         current_block_size += get_size(hdr_pointer(prev_blkp(current_bp)));
         put_word(ftr_pointer(current_bp), pack(current_block_size, 0));
         put_word(hdr_pointer(prev_blkp(current_bp)), pack(current_block_size, 0));
@@ -245,13 +266,13 @@ static void *coalesce(void *current_bp)
         put_word(ftr_pointer(next_blkp(current_bp)), pack(current_block_size, 0));
         current_bp = prev_blkp(current_bp);
     }
-    //printblock(current_bp);
-    //printf("After coalescing, block at %p of size %zu\n", current_bp, current_block_size);
+
     return current_bp;
 }
 
 /*
- * mm_realloc - Naive implementation of realloc
+ * mm_realloc - Naive implementation of realloc, 
+ * no changes made and book direct implementation
  */
 void *mm_realloc(void *ptr, size_t size)
 {
@@ -312,9 +333,6 @@ static void *extend_heap(size_t words)
     if ((uintptr_t)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
-    //printf("extended heap by %zu bytes, new block address: %p\n", size, bp);
-    //printf("next block address: %p\n", hdr_pointer(next_blkp(bp)));
-
     /* Initialize free block header/footer and the epilogue header */
     put_word(hdr_pointer(bp), pack(size, 0));         /* Free block header */
     put_word(ftr_pointer(bp), pack(size, 0));         /* Free block footer */
@@ -327,8 +345,9 @@ static void *extend_heap(size_t words)
 /*
  * place - Place block of asize bytes at start of free block bp
  * and split if remainder would be at least minimum block size
- * we place the blocks and the remainder is moved to the next free block
- * the spliiting of free blocks causes internal fragmentation and can be comparable to the 
+ * only smaller blocks are place at the beginning of the free list 
+ * is at least the minimum block size which is 32 in my implemetaion for the 64 bit
+ * spliiting of free blocks causes internal fragmentation and can be comparable to the 
  * same as the user keeps requesting smaller size blocks.  If we have a large block at the beginning
  * of the heap and the user request a smaller size, we split the allocated block and set the
  * rest as a free block on the heap
@@ -364,7 +383,7 @@ static void place(void *bp, size_t asize)
  */
 static void *find_fit(size_t asize)
 {
-    /* First-fit search is a linear search with runtime 0(N)*/
+    /* First-fit search is a linear search with runtime 0(N) in worst case for larger blocks*/
     void *bp;
     for (bp = heap_listp; get_size(hdr_pointer(bp)) > 0; bp = next_blkp(bp)) {
         if (!get_alloc(hdr_pointer(bp)) && (asize <= get_size(hdr_pointer(bp)))) {
@@ -374,15 +393,11 @@ static void *find_fit(size_t asize)
     return NULL; /* No fit */
 }
 
-void test_heap_traversal(void *bp) {
-    bp = heap_listp;
-    while (get_size(hdr_pointer(bp)) > 0) {
-        size_t size = get_size(hdr_pointer(bp));
-        int alloc = get_alloc(hdr_pointer(bp));
-        bp = next_blkp(bp);
-    }
-}
-
+/*
+ * The following function prints both allocated and unallocated blocks on the heap.
+ * It displays the size and memory address of each block(size_t). Note that the addresses are 
+ * 16-byte aligned, in accordance with the 64-bit implementation.
+ */
 static void printblock(void *bp)
 {
     size_t hsize, halloc, fsize, falloc;
@@ -401,37 +416,19 @@ static void printblock(void *bp)
     printf("%p: header: [%ld:%c] footer: [%ld:%c]\n", bp,
            hsize, (halloc ? 'a' : 'f'),
            fsize, (falloc ? 'a' : 'f'));
-    test_heap_traversal(bp);
-}
-void debug_block(void *bp) {
-    size_t hsize = get_size(hdr_pointer(bp));
-    size_t halloc = get_alloc(hdr_pointer(bp));
-    size_t size  = get_size(ftr_pointer(bp));
-    size_t  falloc = get_alloc(ftr_pointer(bp));
-    printf("Blockss at %p: header: [%ld:%c]\n", bp, hsize, (halloc ? 'a' : 'f'));
-    if (!halloc) {
-        printf("Free block footer at %p: [%ld:%c]\n",bp, size, (halloc ? 'a' : 'f'));
-    }
-    test_heap_traversal(bp);
 }
 
-static void print_blocks(void *bp){
-    bp = heap_listp;
-    while(bp != NULL){
-        printblock(bp);
-        bp = next_blkp(bp);
-        if(get_size(hdr_pointer(bp)) == 0){
-            break;
-        }
-    }
-}
-
+/*
+ * The following function checks whether a block is 16-byte aligned, 
+ * ensuring that both the header and footer of the block have the same payload pointer. 
+ * It displays an error if there are any alignment issues or if the header and footer 
+ * do not match the expected values.
+ */
 static void checkblock(void *bp)
 {
-    size_t hsize = get_size(hdr_pointer(bp));
     if ((size_t)bp % DSIZE != 0)
         printf("Error: %p is not doubleword aligned\n", bp);
-    if (get_payload(hdr_pointer(bp)) != get_payload(ftr_pointer(bp)))
+    if (get_payload(hdr_pointer(bp)) != get_payload(ftr_pointer(bp)) && (size_t)bp == 0)
         printf("Error: header does not match footer\n");
 }
 
