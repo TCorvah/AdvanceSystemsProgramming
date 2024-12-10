@@ -17,7 +17,7 @@
  * 
  * This implementation manages the heap  memory by creating 
  * our own explicit allocator for free and malloc that manages blocks of 
- * virtual memory from the heap.
+ * free virtual memory from the heap.
  *  our helper function that helps creates malloc are the following
  * 
  * - First-fit placement strategy
@@ -31,12 +31,11 @@
  * - Memory is extended as needed using `mem_sbrk`.
  */
 
-
+#define ALIGNMENT 16 
 #define WSIZE       8       /* Word and header/footer size (bytes) */
 #define DWORD_SIZE  16      /* Double-word size (bytes) */
 #define CHUNKSIZE   4096    /* Extend heap by this amount (bytes) */
-#define ALIGN(size) (((size) + 0xF) & ~0xF)
-
+#define ALIGN(size) (((size) + (0XF)) & ~(0XF)) /* for 32 byte alignment */
 /*
  * Block Header and Footer Structures:
  * - `size`: Block size in bytes (60 bits).
@@ -90,9 +89,7 @@ static inline void *prev_free_payload(void *payload);
  * Header: Returns a pointer to the header of the block containing current `payload`.
  */
 static inline header_t *header(void *payload) {
-    header_t * hdr_addr = (header_t *)((char *)payload - WSIZE);
-    return hdr_addr;
-     
+    return  (header_t *)((char *)payload - WSIZE);    
 }
 
 /*
@@ -127,7 +124,7 @@ static inline void *add_merge_block_to_freelist(void *bp){
     }
     // save a pointer of the current header block
     header_t *merge_block = header(bp);
-
+    
     header(bp)->links.fprev = merge_block; // a pointer of the merge block is save in the tail of the list
     header(bp)->links.fnext = merge_block->links.fnext; 
     merge_block->links.fnext->links.fprev = header(bp); // header is save in the tail of the merge block
@@ -152,21 +149,21 @@ static inline void *prev_payload(void *payload) {
     char *p = (char *)payload - block_size;
     return p;
 }
-static inline void *next_free_payload(void *payload) {
-    
+static inline void *next_free_payload(void *payload) {    
     return  header(payload)->links.fnext->payload;
 }
 
 static inline void *prev_free_payload(void *payload) {
-    // Implement this function
     return header(payload)->links.fprev->payload;
 }
 
-
+static inline int floor_log2(uint64_t num) {
+    return 64 - __builtin_clzl(num) - 1;
+}
 
 /* Global pointer to the start of the heap, (char *) 
 is store as 8 byte quad word on a x86-64  machine*/
-static char *heap_listp = 0;  
+static char *heap_listp = NULL; 
 
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
@@ -186,6 +183,7 @@ void mm_init(void)
 {
     // the struct for header_t is 24 bytes in total, 8 bytes for the header,
     // 8 bytes each for the previous and next pointer in the struct.
+    // 
     assert(sizeof(header_t) == 3 * WSIZE);
     //  should be WORD_SIZE bytes after the beginning of a header
     assert(offsetof(header_t, payload) == WSIZE);
@@ -194,12 +192,22 @@ void mm_init(void)
 
 
     mem_init();
-    //char *p; // 8 bytes pointer 
-    /* Create the initial empty heap , the heap is intialize with 48 bytes in total
-     32 bytes for the header, next, previous and footer(prologue block)
-     8 byte for the epilogue block and 8 byte for the initial heap pointer that starts 
-     after the prologue blo but before the epilogue header*/
-    if ((heap_listp = mem_sbrk( 6 * WSIZE) ) == (void *)-1) {
+
+    /* 
+     * Create the initial empty heap. The heap is initialized with a total of 48 bytes, 
+     * structured as follows:
+     *   - 32 bytes for the prologue block, consisting of:
+     *       - 8 bytes for the header
+     *       - 8 bytes for the 'next' pointer
+     *       - 8 bytes for the 'previous' pointer
+     *       - 8 bytes for the footer
+     *   - 8 bytes for the epilogue block (header only).
+     *   - 8 bytes for the initial heap pointer, which starts just after the prologue 
+     *     block but before the epilogue header.
+     */
+
+    size_t init_size = 2 * WSIZE + ( (WSIZE * 4));
+    if ((heap_listp = mem_sbrk( init_size) ) == (void *)-1) {
         perror("mem_sbrk");
         exit(1);
     }
@@ -208,17 +216,19 @@ void mm_init(void)
 
     heap_listp += DWORD_SIZE;
 
-    // prologue block is the sentinel and needs to be modify to account for minimum payload of 16 byte
+    /*The prologue block is the only allocated block with a previous and 
+    * next pointer, its implementation is for alignment purposes
+    */ 
     header_t *prologue_hdr = header(heap_listp);
-    prologue_hdr->size = 2 * DWORD_SIZE;
+    prologue_hdr->size = ALIGN(2 * DWORD_SIZE);
     prologue_hdr->allocated = 1;
     prologue_hdr->links.fprev = prologue_hdr->links.fnext = prologue_hdr;
     footer_t *prologue_ftr = footer(heap_listp);
-    prologue_ftr->size = 2 * DWORD_SIZE;
+    prologue_ftr->size = ALIGN(2 * DWORD_SIZE);
     prologue_ftr->allocated = 1;
 
  
-    // Initialize epilogue
+    // Initialize epilogue block 
     heap_listp +=  2 * DWORD_SIZE;
     header_t *epilogue_hdr = header(heap_listp);
     epilogue_hdr->size = 0;
@@ -226,8 +236,9 @@ void mm_init(void)
   
 
     heap_listp = (char *)heap_listp -  (2 * DWORD_SIZE);
+    
     // Extend the empty heap with a free block of PAGE_SIZE bytes
-    if (extend_heap(CHUNKSIZE/DWORD_SIZE) == NULL) {
+    if (extend_heap(CHUNKSIZE >> 4) == NULL) {
         perror("extend_heap");
        exit(1);
     }
@@ -241,17 +252,29 @@ void mm_deinit(void)
 }
 
 /*
- * mm_malloc - Allocate a block with at least size bytes of payload.
- the minimum block size that is 32 bytes or 4 words, 16 bytes payload, 8 bytes header,
-  8 byte footer. The data returned by malloc must be
- 16 byte aligned including the block address in conformity with a 64 bit machine. 
- Since the heap grows upwards, for correctness, the address size must be increasing and not decreasing
- if a user request 8 bytes, we round it up to 16 and add 8 bytes for header and 8 bytes for footer
- if a user request 20 bytes we allocate 48 bytes, 
- we round up to the nearest power of two which is 32 bytes plus header/footer
- In this explicit free list implementation, we only traverse the free list to find a block in memory
- that has been recently free, as newly free blocks are inserted at teh head of the list
+ * mm_malloc - Allocate a block with at least 'size' bytes of payload.
+ * The minimum block size is 32 bytes (4 words), consisting of:
+ *   - 16 bytes for payload
+ *   - 8 bytes for the header
+ *   - 8 bytes for the footer.
+ * 
+ * All data returned by malloc must be 16-byte aligned, including the block address, 
+ * to comply with 64-bit machine alignment requirements. 
+ * 
+ * Since the heap grows upwards, the block addresses must increase monotonically to ensure correctness.
+ * 
+ * Allocation examples:
+ *   - If a user requests 8 bytes, we round it up to 16 bytes (for payload) and add 8 bytes each for 
+ *     the header and footer, resulting in a total block size of 32 bytes.
+ *   - If a user requests 20 bytes, we round it up to the nearest multiple of 16, which is 32 bytes 
+ *     (payload), and add the header and footer, resulting in a total block size of 48 bytes.
+ * 
+ * In this explicit free list implementation:
+ *   - The free list is traversed to find a suitable block that has been recently freed.
+ *   - Newly freed blocks are inserted at the head of the free list, which allows for efficient 
+ *     allocation of recently freed memory.
  */
+
 void *mm_malloc(size_t size)
 {
     size_t asize;      /* Adjusted block size for alignment*/
@@ -265,31 +288,42 @@ void *mm_malloc(size_t size)
     if (size <=  0){
         return NULL;
     }
-     if (size >  (CHUNKSIZE * 4)){ // I set a constraint to the max chunksize that a user can request
+    /*
+     constraint for max size a user can request
+    */
+     if (size >  (CHUNKSIZE * 2)){ 
         errno = ENOMEM;
      }
-    /* Adjust block size to include overhead and alignment reqs., note that this condition
-    can cause internal fragmentation if for instance a user keep requesting a smaller payload
-    and we keep padding for alignmenet, the unused space is what is known as the fragmentated space
-    on the heap*/
-    if (size <= DWORD_SIZE){ // this case is when a user request less than 16 bytes, this case
-        asize = 2*DWORD_SIZE; // usually doesn't ;ead to external fragmentation
+    /* 
+     * Adjust the block size to include overhead and alignment requirements. 
+     * Note that this condition can lead to internal fragmentation. 
+     * For example, if a user repeatedly requests small payloads, the allocator 
+     * will add padding to meet alignment requirements. The unused space in each 
+     * block, caused by the padding, contributes to fragmentation within the heap.
+     */
+    if (size <= DWORD_SIZE){ 
+        asize = 2*DWORD_SIZE; 
     }else{
-        asize = DWORD_SIZE * ((size + (DWORD_SIZE) + (DWORD_SIZE-1)) / DWORD_SIZE); //when a user request more than 16 bytes but less than the allowable size
+        asize = DWORD_SIZE * ((size + (DWORD_SIZE) + (DWORD_SIZE-1)) / DWORD_SIZE); 
     }
-    /* Search the free list for a fit , not that there may be lots of small free blocks that could
-    sum up a user request if they are laid out in one contiguos block in memory. 
-    An external fragmentation occurs when a user request a block size and we cannot find a fit
-    even though we have enough empty block on the heap, the coalescong helps to fix this issue*/
+    /* 
+     * Search the free list for a fit using the first fit placement policy. Note that there may be many small free blocks 
+     * that could collectively satisfy a user's request if they were contiguous in memory. 
+     * External fragmentation occurs when a user requests a block size, but no suitable 
+     * contiguous block is found, even though there is sufficient free memory overall. 
+     * Coalescing helps mitigate this issue by merging adjacent free blocks into larger 
+     * contiguous blocks.
+     */
     if ((bp = find_fit(asize)) != NULL) {
         place(bp, asize);
         return bp;
     }
 
-    /* No fit found even with the coalesce, we extend the heap by a chunksize of memory and place the block
-    at the front of the free list */
-    extendsize = MAX(asize,CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/DWORD_SIZE)) == NULL){
+    /* No fit found even with the coalesce, we extend the heap by a chunksize of memory 
+    * and place the remaining block in the explicit free list
+   */
+    extendsize = ((asize + CHUNKSIZE - 1) >> 12 ) <<  12;
+    if ((bp = extend_heap(extendsize >> 4)) == NULL){
         return NULL;
     }
     place(bp, asize);
@@ -297,7 +331,10 @@ void *mm_malloc(size_t size)
 }
 
 /*
- * mm_free - Free a block, we will use a free list to keep track of the free blocks in the heap
+ * mm_free - Frees a block of memory and adds it to the free list, 
+ * which keeps track of available blocks on the heap. The actual 
+ * merging of adjacent free blocks (if applicable) is handled 
+ * by the coalesce function, which performs the heavy lifting.
  */
 void mm_free(void *bp)
 {
@@ -306,46 +343,43 @@ void mm_free(void *bp)
     if (bp == NULL) {
         return;
     }
-    //header_t *new_free_hdr = header(bp);
-    //size_t size = header(bp)->size << 4;
-    if (heap_listp == NULL){
-        mm_init();
-    }
     
-    //footer_t *prev_blk_ftr = footer(prev_payload(bp));
-    //footer_t *curr_blk_ftr = footer(bp);
-    //header_t *new_blk = header(next_payload(bp));
-    //if(prev_blk_ftr->allocated == 1 && )
-    //header(bp)->size = footer(bp)->size = size;
-    header(bp)->allocated = footer(bp)->allocated = 0;
     coalesce(bp);
 }
 
 /*
- * coalesce - Boundary tag coalescing. Return ptr to coalesced block
- this deals with the issue of merging free blocks to help reduce external fragmentation
- and increases the likelihood of finding contiguios blocks in memory.
- all newly merge free blocks will be place at the front of the free list
-  for easy insertion and removal
+ * coalesce - Boundary tag coalescing. Returns a pointer to the coalesced block.
+ * This function merges adjacent free blocks to reduce external fragmentation 
+ * and improve the likelihood of finding contiguous free memory. 
+ * Newly merged free blocks are added to the front of the free list for 
+ * quick access and removed from their previous positions in the list.
  */
-static void *coalesce(void *bp)
+static void *coalesce(void *current_block)
 {
-    void *prev = prev_payload(bp);
-    void *next = next_payload(bp);
+    void *prev = prev_payload(current_block);
+    void *next = next_payload(current_block);
 
     size_t prev_alloc = header(prev)->allocated;
     size_t next_alloc = header(next)->allocated;
 
-    size_t current_payload_size = header(bp)->size; 
+    size_t current_payload_size = header(current_block)->size; 
 
     if (prev_alloc == 1 && next_alloc == 1) {
         /* Case 1: No coalescing needed, both previous and next blocks are allocated */
-        return bp;
+        header_t *new_free_hdr = header(current_block);
+        footer_t *new_free_ftr = footer(current_block);
+        new_free_hdr->size = current_payload_size;
+        new_free_ftr->size = current_payload_size;
+        new_free_hdr->allocated = new_free_ftr->allocated = 0;
+        new_free_hdr->links.fprev = new_free_hdr->links.fnext = new_free_hdr;
+        add_merge_block_to_freelist(current_block);
+        
     } else if (prev_alloc == 1 && next_alloc == 0) {
         /* Case 2: Coalesce with the next block, previous block is allocated */
         current_payload_size += header(next)->size;
-        header(bp)->size = current_payload_size;
-        footer(bp)->size = current_payload_size;
+        header(current_block)->size = ALIGN(current_payload_size);
+        footer(current_block)->size = ALIGN(current_payload_size);
+        footer(current_block)->allocated = 0;
 
         // Remove next from the free list
         remove_from_freelist(next);
@@ -353,33 +387,33 @@ static void *coalesce(void *bp)
     } else if (prev_alloc == 0 && next_alloc == 1) {
         /* Case 3: Coalesce with the previous block, next block is allocated */
         current_payload_size += header(prev)->size;
-        footer(bp)->size = current_payload_size;
-        header(prev)->size = current_payload_size;
+        footer(current_block)->size = ALIGN(current_payload_size);
+        header(prev)->size = ALIGN(current_payload_size);
+        header(prev)->allocated = 0;
+
 
         // Remove prev from the free list
         remove_from_freelist(prev);
 
         // Coalesced free block starts at prev now
-        bp = prev;
+        current_block = prev;
     } else {
         /* Case 4: Coalesce with both previous and next blocks */
         current_payload_size += header(prev)->size + footer(next)->size;
-        header(prev)->size = current_payload_size;
-        footer(next)->size = current_payload_size;
+        header(prev)->size = ALIGN(current_payload_size);
+        footer(next)->size = ALIGN(current_payload_size);
 
-        // Remove both prev and next from the free list
-        //freeList(prev);  // Remove 'prev' block from free list
-        //freeList(next);  // Remove 'next' block from free list
-            // Remove prev and next from free list
+ 
+        // Remove prev and next from free list
         remove_from_freelist(prev);
         remove_from_freelist(next);
         // Coalesced free block starts at prev now
-        bp = prev;
+        current_block = prev;
     }
     // Add coalesced block to beginning of free list
-    add_merge_block_to_freelist(bp);
+    add_merge_block_to_freelist(current_block);
     
-    return bp;
+    return current_block;
 }
 /*
  * mm_realloc - Naive implementation of realloc
@@ -439,43 +473,45 @@ static void *extend_heap(size_t words)
     size_t size;
 
     /* Allocate an even number of words to maintain alignment, 
-    not too sure if I should divide by double word or word*/
-    size = (words % 2) ? (words+1) * DWORD_SIZE : words * DWORD_SIZE;
+     using a word*/
+    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
 
-    if ((bp = mem_sbrk(size)) == (void *)-1) {
-        return NULL;
+    if (size < (8 * WSIZE))
+    {
+        size = 8 * WSIZE;
     }
-
+    
+    if ((uintptr_t)(bp = mem_sbrk(size)) == -1)
+        return NULL;
     /* Initialize free block header/footer and the epilogue header */
     header(bp)->size = size;        /* Free block header */
     footer(bp)->size = size;
     header(bp)->allocated = footer(bp)->allocated = 0;
-
-    header(bp)->links.fnext = header(bp)->links.fprev = header(bp);
+    
+    header(bp)->links.fprev =  header(bp)->links.fnext = header(bp);
    
      /* New epilogue header */
     header(next_payload(bp))->size = 0;
     header(next_payload(bp))->allocated = 1; 
    
-
     /* Coalesce if the previous block was free */
     return coalesce(bp);
 }
 
 /*
- * place - Place block of asize bytes at start of free block bp
- *         and split if remainder would be at least minimum block size
+ * place - Place block of asize bytes in front pf the explicit
+ *  free list and split if remainder would be at least minimum block size
  *  this technique can sometimes introduce internal fragmentation.
  *  
  */
 static void place(void *p, size_t asize)
 {
-    uint64_t current_size = header(p)->size;
+    size_t current_size = header(p)->size;
 
     // Get previous free block and next free payloads
     void *fprev_p = prev_free_payload(p);
     void *fnext_p = next_free_payload(p);
-
+  
     if ((current_size - asize) >= (2 * DWORD_SIZE)) {
 
         header(p)->size = asize;
@@ -487,18 +523,21 @@ static void place(void *p, size_t asize)
         header(q)->size = current_size - asize;
         footer(q)->size = current_size - asize;
         header(q)->allocated = footer(q)->allocated = 0;
+        //coalesce(q);
 
         // Add q to the free list in p's place
-        header(fnext_p)->links.fprev = header(q);
-        header(fprev_p)->links.fnext = header(q);
+        header(fnext_p)->links.fprev = header(fprev_p)->links.fnext = header(q);
         header(q)->links.fprev = header(fprev_p);
         header(q)->links.fnext = header(fnext_p);
+   
+        coalesce(q);
     } else {
         // There was no leftover, simply remove p from the free list
         header(fnext_p)->links.fprev = header(fprev_p);
         header(fprev_p)->links.fnext = header(fnext_p);
-
         header(p)->allocated = footer(p)->allocated = 1;
+        remove_from_freelist(p);
+       
     }
 }
 /*
@@ -522,14 +561,19 @@ static void *find_fit(size_t asize)
 
 static void printblock(void *p)
 {
-    uint64_t hsize, halloc, fsize, falloc, plinks;
+    size_t hsize, halloc, fsize, falloc, plinks;
 
     hsize = header(p)->size;
     halloc = header(p)->allocated;
     fsize = footer(p)->size;
     falloc = footer(p)->allocated;
+    void *a =  header(p)->links.fprev->payload;
+    void *b =   header(p)->links.fnext->payload;
 
     // Print free list links for free blocks and the sentinel node
+    // the sentinel node is the only allocated block with a previous
+    // and next pointer, it implementation is soley for alignment 
+    // purposes
     plinks = !halloc || p == heap_listp;
 
     if (hsize == 0) {
@@ -538,14 +582,14 @@ static void printblock(void *p)
     }
 
     if (plinks) {
-        printf("%p: header: [%llu:%c] {%p|%p} footer: [%llu:%c]\n", p,
+        printf("%p: header: [%lu:%c] {%p|%p} footer: [%lu:%c]\n", p,
             hsize, (halloc ? 'a' : 'f'),
                header(p)->links.fprev->payload,
                header(p)->links.fnext->payload,
                fsize, (falloc ? 'a' : 'f'));
 
     } else {
-        printf("%p: header: [%llu:%c] {} footer: [%llu:%c]\n", p,
+        printf("%p: header: [%lu:%c] {} footer: [%lu:%c]\n", p,
                hsize, (halloc ? 'a' : 'f'),
                fsize, (falloc ? 'a' : 'f'));
     }
@@ -557,7 +601,7 @@ static void checkblock(void *bp)
     printf("Error: Out-of-bounds access at %p\n", bp);
     return;
 }
-    if ((unsigned long)bp % DWORD_SIZE)
+    if ((size_t)bp % DWORD_SIZE != 0)
         printf("Error: %p is not doubleword aligned\n", bp);
 
     if (header(bp)->size != footer(bp)->size)
@@ -590,7 +634,6 @@ void checkheaps(int verbose)
      checkblock(heap_listp);
     }
     
-
     for (bp = heap_listp; header(bp)->size > 0; bp = next_payload(bp)) {
         if (verbose)
             printblock(bp);
@@ -623,7 +666,7 @@ void checkheap(int verbose)
     checkblock(heap_listp);
 
     // Check all blocks
-    for (p = heap_listp; header(p)->size > 0; p = next_payload(p)) {
+    for (p = heap_listp; header(p)->size > 0; p = (void*)next_payload(p)) {
         if (verbose) {
             printblock(p);
         }
