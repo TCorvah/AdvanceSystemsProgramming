@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -26,15 +25,13 @@ static Myfunc myfunc;
 #define COLOR_MAGENTA "\x1B[95m"
 #define COLOR_GREEN   "\x1B[92m"
 #define COLOR_RESET   "\x1B[0m"
-#define EXEC  "/"
 #define MAXLINE 4096
 
 // Global variables initialized in `main()` based on command-line arguments
-size_t pattern_len;
-size_t file_print_offset;
 static char *fullpath;
 struct stat buf;
-static long nreg, ndir;
+static long nreg, ndir; // Counters for files and directories
+size_t pattern_len;  // Length of the search pattern
 
 // Function for handling errors and printing a message before exiting
 static inline void exit_error(char *msg) {
@@ -43,7 +40,7 @@ static inline void exit_error(char *msg) {
 }
 
 /* The following function increment the regular file and the directory and restrict all
-searches between regular files and directories. 
+searches between regular files and directories during a search for a pattern. 
 */
 static int myfunc(const char *pathname, const char *pattern, const struct stat *statptr, int type)
 {    
@@ -56,6 +53,7 @@ static int myfunc(const char *pathname, const char *pattern, const struct stat *
             fprintf(stderr, "Error: Directory found when expecting a file: %s\n", pathname);
         } else if ((statptr->st_mode & S_IFMT) == S_IFLNK) {
             fprintf(stderr, "Skipping symbolic link: %s\n", pathname);
+            break;
         } else {
             fprintf(stderr, "Unknown file type for %s\n", pathname);
         }
@@ -74,7 +72,7 @@ static int myfunc(const char *pathname, const char *pattern, const struct stat *
     }   
     return 0; 
 }
-/* an array of extensions for pattern search*/
+/* an array of file extensions for pattern search*/
 const char *allowed_extensions[] = {".c", ".cpp", ".h", ".py", ".txt", ".md"};
 
 
@@ -103,14 +101,14 @@ static int has_allowed_extension(const char *filename) {
 static int search_file(char *file, char *pattern, off_t file_size) {  
     FILE *fptr;
     char *match;
-    char *path = malloc(file_size);
+    char *path = malloc(file_size + 1);
     if(!path){
         exit_error("malloc failed");
     }
     //stat file, to prevent symbolic link following
     if(lstat(file, &buf) < 0){
         free(path);
-        exit_error("can't stat");
+        exit_error("can't stat");   
 
     }
     //open file for readonly
@@ -119,42 +117,41 @@ static int search_file(char *file, char *pattern, off_t file_size) {
             free(path);
             exit_error("can't open file");
         }
-    int num = 1;
+    size_t line_number = 1;
+    pattern_len = strlen(pattern);
+
     //file is read line by line and each line it checks if the
     // pattern exist using strstr
-    while(fgets(path, buf.st_size, fptr ) != NULL){
-        while(!strchr(path, '\n') && !feof(fptr)){ //if the path is too long, we realloc
-            file_size *= 2;
-            path = realloc(path, file_size);
-            if(!path){
-                fclose(fptr);
-                exit_error("realloc failed");
-            }
-            fgets(path + strlen(path), file_size - strlen(path), fptr);
-        }
-        if ((match = strstr(path, pattern))) { // the print out is buggy and I am working on it
-            printf("%s\n:", file);  // Print the file path
-           // Print the line number in red
-            printf(COLOR_RED "%d\n: " COLOR_RESET, num);
-            
-            // Print the part of the line before the match
-            char *line_part_before_match = path;
-            size_t before_match_len = match - path;
-            printf("%.*s", (int)before_match_len, line_part_before_match);  // Print the part before match
+    while(fgets(path, file_size, fptr ) != NULL){
+       // while(!strchr(path, '\n') && !feof(fptr)){ //if the path is too long, we realloc
+           //file_size *= 2;
+           match = strstr(path, pattern);
+           if(match){
+            // Print file name
+            printf("%s:\n", file);
 
-            // Print the matched part in green
-            printf(COLOR_GREEN "%.*s" COLOR_RESET, (int)strlen(pattern), match);  // Print the match in green
+            // Print line number in red
+            printf(COLOR_RED "%zu: " COLOR_RESET, line_number);
 
-            // Print the remaining part of the line after the match
-            printf("%s", match + strlen(pattern));  // Print the part after match
-        }
-        num++;
-    }
-    fclose(fptr);
-    free(path);
+            // Print before match
+            printf("%.*s", (int)(match - path), path);
 
+            // Print match in green
+            printf(COLOR_GREEN "%.*s" COLOR_RESET, (int)strlen(pattern), match);
+
+            // Print rest of line
+            printf("%s", match + strlen(pattern));
+
+
+           }
     
-return(0);
+         
+        line_number++;   
+        
+    }
+   fclose(fptr);
+   free(path);  
+  return(0);
 }
 
 /* 
@@ -182,7 +179,7 @@ static int  helper_func(char *path, char *pattern) {
     }
   
     if ((dp = opendir(path)) == NULL) {  /* can’t read directory */
-        return(EXIT_FAILURE);
+        return myfunc(path,pattern, &buf, NO_PERM);
     }
     // Read the directory and recursively process files in the directory
     while ((dirp = readdir(dp)) != NULL){
