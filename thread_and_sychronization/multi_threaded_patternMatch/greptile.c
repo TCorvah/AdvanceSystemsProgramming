@@ -5,7 +5,6 @@
 #include <errno.h>
 
 // Initialized in main() based on command-line arguments
-static char *fullpath;
 struct stat buff;
 size_t pattern_len;
 size_t file_print_offset;
@@ -305,15 +304,11 @@ void traverse_directory(const char *path) {
     }
     // Ensure the fullpath buffer is clear before use
     // Not strictly necessary because fullpath is static, but it's safer if you want to reset
-    fullpath[0] = '\0';  // Manually clear if needed
+    //fullpath[0] = '\0';  // Manually clear if needed
 
     // Construct the full path of the directory
-    snprintf(fullpath, sizeof(fullpath), "%s", path);
-    if (fullpath[strlen(fullpath) - 1] != '/') {
-        snprintf(fullpath + strlen(fullpath), sizeof(fullpath) - strlen(fullpath), "/");
-    }
- 
-    if((dp = opendir(fullpath)) == NULL){
+
+    if((dp = opendir(path)) == NULL){
        err_msg("can't open");
     }
 
@@ -322,9 +317,15 @@ void traverse_directory(const char *path) {
        if(strcmp(dirp->d_name, ".") == 0 || 
            strcmp(dirp->d_name, "..") == 0) 
             continue;
+        // Allocate enough space for the path, a slash, the entry name, and a null byte
+        size_t path_size = (strlen(path) + 1 + strlen(dirp->d_name) + 1) * sizeof(char);
+        char *fullpath = malloc(path_size);
+
+         if (!fullpath)
+            perror("malloc() failed");
 
         // Construct the full path of the file/directory
-        snprintf(fullpath + strlen(fullpath), sizeof(fullpath) - strlen(fullpath), "%s", dirp->d_name);
+        snprintf(fullpath, path_size, "%s/%s", path, dirp->d_name);
 
         if (lstat(fullpath, &statbuf) == -1) {
             perror("lstat");
@@ -332,16 +333,17 @@ void traverse_directory(const char *path) {
         }
         if(S_ISDIR(statbuf.st_mode)){
             traverse_directory(fullpath);
+            free(fullpath);
         }else if ( S_ISREG(statbuf.st_mode)){
              // Enqueue the job
             rb_enqueue(&ring, fullpath, statbuf.st_size);
-        }
-              
+        }else{
+            free(fullpath);
+        }           
+    
     }
-    if(closedir(dp) < 0){
-        err_quit("can't close %s",dp );
-    }
-  
+   
+      closedir(dp);
 
 }
 // Worker thread function prototype
@@ -350,23 +352,18 @@ void *search_files(void *arg);
 
 
 int main(int argc, char **argv){
-    char *directory_path = ".";
-    char *pattern;
     int i, n, err;
     struct search_ring_buffer search_rb;
     struct search_job job;
+    uint64_t any_threads_matched = 0;
 
-    if (argc == 2) {
-        pattern = argv[1];
-        file_print_offset = 2; // Skip "./" prefix if no directory argument
-
-    } else if (argc == 3) {
-        pattern = argv[1];
-        directory_path = argv[2];
-    } else {
-        fprintf(stderr,"usage: greptile <pattern> [directory]\n");
-        exit(2);
-    }
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <file_path> <pattern>\n", argv[0]);
+        return 1;
+    
+    } 
+     char *directory_path = argv[1];  // Can be "."
+     char *pattern = argv[2];
 
     //uint64_t any_threads_matched = 0;
 
@@ -384,14 +381,19 @@ int main(int argc, char **argv){
 
     // Wait for worker threads to finish (optional - depends on whether you want to join them)
     for (i = 0; i < NUM_THREADS; i++) {
-        pthread_join(threads[i], NULL);
+        rb_enqueue(&search_rb, NULL, 0);
     }
 
- 
+    for (int i = 0; i < NUM_THREADS; i++) {
+        uint64_t thread_matched = 0;
+        pthread_join(threads[i], (void **)&thread_matched);
+        any_threads_matched |= thread_matched;
+    }
+
     rb_destroy(&search_rb);
 
     // Return 0 if any thread found a match, 1 otherwise
-    //return any_threads_matched == 0;
-   return 0;
+    return any_threads_matched == 0;
+   //return 0;
 }
 
