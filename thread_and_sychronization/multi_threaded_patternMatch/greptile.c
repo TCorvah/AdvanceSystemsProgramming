@@ -3,12 +3,19 @@
 #include <dirent.h>
 #include <limits.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 
 // Initialized in main() based on command-line arguments
 struct stat buff;
 size_t pattern_len;
 size_t file_print_offset;
-char *filename;
+int colorize;
 
 // initialize the circular ring buffer
 void rb_init(struct search_ring_buffer *rb, size_t capacity) {
@@ -55,7 +62,7 @@ void rb_enqueue(struct search_ring_buffer *rb, char *file_path, off_t file_size)
         err_sys("malloc failed");
 
     // Dynamically allocate memory for file_path and copy the string
-    job->file_path = malloc(strlen(file_path) + 1);  // +1 for the null terminator
+    job->file_path = malloc(file_size);  // +1 for the null terminator
     if (job->file_path == NULL)
         err_sys("malloc failed for file_path");
 
@@ -85,8 +92,9 @@ void rb_enqueue(struct search_ring_buffer *rb, char *file_path, off_t file_size)
 
     printf(" new job added to buffer %s\n",file_path );
 
-    // Signal that there is a job available in the buffer
-    pthread_cond_broadcast(&rb->has_job_cond);  
+    // Signal helps prevent interleave between the threads, so
+    // that a single thread is working on a file at a time
+    pthread_cond_signal(&rb->has_job_cond);  
     pthread_mutex_unlock(&rb->mutex);
     
 }
@@ -115,15 +123,17 @@ struct search_job rb_dequeue(struct search_ring_buffer *rb) {
     return job;
 }
 
-
+// I am changing the semantics from fopen to open and others
+// read function to avoid concurrent access of worker threads 
+// in a multi threaded enviroment
 void read_file(char *file, const char *pattern){
     struct stat buff;
-    FILE *fptr;
+    int fd;
     char *match;
-    //open file for readonly
 
-    fptr = fopen(file, "r" );
-        if(fptr == NULL){
+    //open file for readonly
+    fd = open(file, O_RDONLY );
+        if(fd == -1){
            perror("can't open file");
            return;
         }
@@ -131,26 +141,48 @@ void read_file(char *file, const char *pattern){
     // Get the size of the file
     if (lstat(file, &buff) < 0) {
         perror("stat() failed");
-        fclose(fptr);
+        close(fd);
         return;
     }
  
     char *path = malloc(buff.st_size + 1);
     if(path == NULL){
         perror("mallaoc failed");
-        fclose(fptr);
+        close(fd);
         return;
     }
-    int num = 0;
-    while(fgets(path, buff.st_size + 1, fptr ) != NULL){
+   ssize_t bytes_read = read(fd,path,  buff.st_size );
+        if(bytes_read < 0){
+            perror("read() failed");
+            free(path);
+            close(fd);
+            return;
+        }
+        path[bytes_read] = '\0';
+        char *line = path;
+        int line_number = 1;
+        while (line) {
+            char *next_line = strchr(line, '\n');
+            if (next_line) {
+                *next_line = '\0'; // Temporarily null-terminate the current line
+        }
         match = strstr(path, pattern);
             if(match){
-            printf("%s %s", file, match);  
+            printf("Match found in file %s at line %d: %s\n", file, line_number, line);  
 
         }
+        if (next_line) {
+            *next_line = '\n'; // Restore newline character
+            line = next_line + 1;
+        } else {
+            line = NULL;
+        }
+        line_number++;
+    
     }
-    fclose(fptr);
-    free(path);    
+  
+    free(path); 
+    close(fd);   
 
 }
 
@@ -201,7 +233,7 @@ void *search_files(void *arg) {
     struct stat buff;
     char *contents;
     size_t contents_size = buff.st_size;
-    int num = 1;
+    int num;
 
     // Ensure the ring buffer and job are initialized properly
     pthread_mutex_lock(&rings->mutex);

@@ -3,14 +3,17 @@
 #include <pthread.h>
 #include <limits.h>
 #include <assert.h>
-static char *fullpath;
 
 pthread_mutex_t filelock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t  alertWorker = PTHREAD_COND_INITIALIZER;
 pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER;
+int colorize;
 
-struct print_queue *head = NULL;
-struct print_queue *tail = NULL;
+#define COLOR_RED     "\x1B[91m"
+#define COLOR_MAGENTA "\x1B[95m"
+#define COLOR_GREEN   "\x1B[92m"
+#define COLOR_RESET   "\x1B[0m"
+
 
 /* Initialize the print queue with the file path */
 void pq_init(struct print_queue *pq, char *file_path) {
@@ -94,11 +97,22 @@ void pq_print(struct print_queue *pq, const char *pattern) {
     struct print_job *current; 
     printf("Jobs matching pattern '%s' in file: %s\n", pattern, pq->file_path);
     while((current = pq_pop_front(pq)) != NULL) {
+         int match_offset = current->match - current->line; 
+         if(colorize){
+         printf(COLOR_GREEN "%d" COLOR_RESET ":%.*s" COLOR_RED "%s" COLOR_RESET "%s\n",
+                current->line_num,
+                match_offset, current->line,
+                pattern,
+                current->match);
+        } else {
+            printf("%d:%s\n", current->line_num, current->line);
+        }
             printf("Line: %s\nMatch: %s\nLine Number: %d\n",
                    current->line, current->match, current->line_num);
+     // No need to free any jobs here since they remain in the queue
+    free(current);
       
     }
 
-    // No need to free any jobs here since they remain in the queue
-    free(current);
+   
 }
