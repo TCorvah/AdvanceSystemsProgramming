@@ -22,8 +22,4 @@ void pq_add_tail(struct print_queue *pq, char *line, char *match, int line_num);
 struct print_job *pq_pop_front(struct print_queue *pq);
 void pq_print(struct print_queue *pq, const char *pattern);
 
-
-
-
-
 #endif  /* _MYQUEUH_H */

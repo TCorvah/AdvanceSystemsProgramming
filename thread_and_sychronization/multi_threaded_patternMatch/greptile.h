@@ -65,6 +65,20 @@ struct search_ring_buffer {
     pthread_cond_t has_space_cond; /*conditional mutex for adding jobs*/
 };
 
+struct print_job {
+    char *line;
+    char *match; // points to the match within line
+    int line_num;
+    struct print_job *next;
+};
+
+struct print_queue {
+    char *file_path;
+    struct print_job *head;
+    struct print_job *tail;
+};
+
+
 struct worker_args {
         struct search_ring_buffer *ring;
         const char *pattern;
@@ -83,9 +97,6 @@ void *search_files(void *arg);
 void traverse_directory(const char *path);
 
 
-static void err_doit(int errnoflag, int error, const char *fmt, va_list ap);
-void err_ret(const char *fmt, ...);
-void err_sys(const char *fmt, ...);
 void err_cont(int error, const char *fmt, ...);
 void err_exit(int error, const char *fmt, ...);
 void err_dump(const char *fmt, ...);
