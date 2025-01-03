@@ -1,142 +1,91 @@
 #include "greptile.h"
 #include <dirent.h>
-#include <limits.h>
-#include <errno.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
+#include <pthread.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stddef.h>
-#include <pthread.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
+#define MAX_FILES 1024
+#define NUM_THREADS 4
+
+#define COLOR_RED     "\x1B[91m"
+#define COLOR_MAGENTA "\x1B[95m"
+#define COLOR_GREEN   "\x1B[92m"
+#define COLOR_RESET   "\x1B[0m"
 
 // Initialized in main() based on command-line arguments
-struct stat buff;
 size_t pattern_len;
 size_t file_print_offset;
 int colorize;
-struct search_ring_buffer search_rb;
 
-// initialize the circular ring buffer
+static inline void error(char *msg) {
+    perror(msg);
+    exit(2);
+}
+
+
+static struct search_ring_buffer search_rb;
+
 void rb_init(struct search_ring_buffer *rb, size_t capacity) {
     rb->jobs = malloc(capacity * sizeof(struct search_job));
     if (!rb->jobs)
-        err_msg("malloc() failed");
+        error("malloc() failed");
+
     rb->capacity = capacity;
     rb->num_jobs = 0;
     rb->enqueue_index = 0;
     rb->dequeue_index = 0;
+
     if (pthread_mutex_init(&rb->mutex, NULL) != 0)
-        perror("pthread_mutex_init() failed");
+        error("pthread_mutex_init() failed");
     if (pthread_cond_init(&rb->has_job_cond, NULL) != 0)
-        perror("pthread_cond_init() failed");
+        error("pthread_cond_init() failed");
     if (pthread_cond_init(&rb->has_space_cond, NULL) != 0)
-        perror("pthread_cond_init() failed");
+        error("pthread_cond_init() failed");
 }
 
-// frees the buffer
 void rb_destroy(struct search_ring_buffer *rb) {
-    if (rb->jobs) {
-        free(rb->jobs);  // Free the allocated memory for jobs
-    }
+    free(rb->jobs);
     pthread_mutex_destroy(&rb->mutex);
     pthread_cond_destroy(&rb->has_job_cond);
     pthread_cond_destroy(&rb->has_space_cond);
 }
 
-// checks status of the buffer if empty
-bool rb_empty(struct search_ring_buffer *rb){
-    return(rb->num_jobs == 0);
-}
-
-// checks status of the buffer if full
-bool rb_full(struct search_ring_buffer *rb){
-    return(rb->capacity == rb->num_jobs);
-}
-
-// this function enqueue a job into the ring buffer taking into account its
-//size
-void rb_enqueue(struct search_ring_buffer *rb, char *file_path, off_t file_size) { 
-    struct search_job *job;
-
-    if ((job = malloc(sizeof(struct search_job))) == NULL)
-        perror("malloc failed");
-
-    // Dynamically allocate memory for file_path and copy the string
-
-    char *path = malloc(job->file_size);  // +1 for the null terminator
-    if (job->file_path == NULL)
-        perror("malloc failed for file_path");
-       
-   // lock the mutex
+void rb_enqueue(struct search_ring_buffer *rb, char *file_path, off_t file_size) {
     pthread_mutex_lock(&rb->mutex);
-    while(rb_full(rb)){
-         pthread_cond_wait(&rb->has_space_cond, &rb->mutex);
-    }
 
-    assert(rb->num_jobs < rb->capacity); // Ensure buffer size is not exceeded
+    // Wait until there's space in the ring buffer
+    while (rb->num_jobs == rb->capacity)
+        pthread_cond_wait(&rb->has_space_cond, &rb->mutex);
 
-    // Insert the job into the buffer
-    rb->jobs[rb->enqueue_index] = *job;
-
-    //Update the enqueue_index to point to the next free slot
-    rb->dequeue_index = (rb->dequeue_index + 1) % rb->capacity; 
+    rb->jobs[rb->enqueue_index] = (struct search_job){file_path, file_size};
+    rb->enqueue_index = (rb->enqueue_index + 1) % rb->capacity;
     rb->num_jobs++;
-    printf(" new job added to buffer %s\n",file_path );
-    // Signal helps prevent interleave between the threads, so
-    // that a single thread is working on a file at a time
-    pthread_cond_signal(&rb->has_job_cond);  
+
+    pthread_cond_signal(&rb->has_job_cond);
     pthread_mutex_unlock(&rb->mutex);
-    
 }
 
 struct search_job rb_dequeue(struct search_ring_buffer *rb) {
-    printf("Dequeue attempt\n");
     struct search_job job;
     pthread_mutex_lock(&rb->mutex);
 
-    // Wait until there is a job to dequeue
-    while(rb_empty(rb)){
+    // Wait until the ring buffer is not empty
+    while (rb->num_jobs == 0)
         pthread_cond_wait(&rb->has_job_cond, &rb->mutex);
-    }
-    // Dequeue the job from the buffer
-    job = rb->jobs[rb->dequeue_index]; // Access the job at the dequeue index
-    
-    // Update the dequeue index to point to the next job
+
+    job = rb->jobs[rb->dequeue_index];
     rb->dequeue_index = (rb->dequeue_index + 1) % rb->capacity;
-    rb->num_jobs--; // Decrease the number of jobs in the buffer
+    rb->num_jobs--;
 
-    // Signal that there is now space in the buffer
     pthread_cond_signal(&rb->has_space_cond);
-
     pthread_mutex_unlock(&rb->mutex);
-    
     return job;
-}
-/* an array of file extensions for pattern search*/
-const char *allowed_extensions[] = {".c", ".cpp", ".h", ".py", ".txt", ".md"};
-
-const int num_allowed_extensions = sizeof(allowed_extensions) / sizeof(allowed_extensions[0]);
-
-/* the following function takes in a filename and check to ensure only the allowable
-* file extensions are consider in the search. The time to determine a file extension is linear
-* in the length of the allowed extensions. 
-*/
-static int has_allowed_extension(const char *filename) {
-    const char *dot = strrchr(filename, '.');  // Find the last dot in the filename
-    if (!dot || dot == filename) {
-        return 0;  // No extension found, 
-    }
-    for (int i = 0; i < num_allowed_extensions; i++) {
-        if (strcmp(dot, allowed_extensions[i]) == 0) {
-            return 1;  // Extension matches one of the allowed
-        }
-    }
-    return 0;  // Extension not in allowed list
 }
 
 void pq_init(struct print_queue *pq, char *file_path) {
@@ -148,7 +97,7 @@ void pq_init(struct print_queue *pq, char *file_path) {
 void pq_add_tail(struct print_queue *pq, char *line, char *match, int line_num) {
     struct print_job *job = malloc(sizeof(struct print_job));
     if (!job)
-        perror("malloc() failed");
+        error("malloc() failed");
 
     job->line = line;
     job->match = match;
@@ -199,147 +148,64 @@ void pq_print(struct print_queue *pq, const char *pattern) {
     }
 }
 
-// I am changing the semantics from fopen to open and others
-// read function to avoid concurrent access of worker threads 
-// in a multi threaded enviroment
-char *read_file(char *file, size_t file_size){
-    struct stat buff;
-    int fd = 0;
-    size_t contents_size = buff.st_size;
+// the following function reads the file into the buffer
+// by line using fread
+char *read_file_into_buffer(char *path, size_t file_size) {
 
-    // Get the size of the file
-    if (lstat(file, &buff) < 0) {
-        perror("stat() failed");
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        perror("Failed to open file");
         return NULL;
-    }
-    if(!S_ISREG(buff.st_mode)){
-        printf("Error: %s is not a regular file\n", file);
-        return NULL;
-    }
-
-    //open file for readonly
-    fd = open(file, O_RDONLY );
-        if(fd == -1){
-           perror("can't open file");
-           close(fd);
-           return NULL;
-        }
-
-    contents_size = buff.st_size > 0 ? buff.st_size : 1024;   
-    char *path = malloc(contents_size);
-    if(path == NULL){
-        perror("mallaoc failed");
-        close(fd);
+    }   
+    // Get the file descriptor from the FILE * using fileno
+    int fd = fileno(file);
+    if (fd == -1) {
+        perror("Failed to get file descriptor");
+        fclose(file);  // Close the file pointer
         return NULL;
     }
 
-    ssize_t bytes_read = read(fd,path,file_size );
-    if(bytes_read < 0){
-        perror("read() failed");
-        free(path);
-        close(fd);
+    // Use fstat to get file information
+    struct stat file_info;
+    if (fstat(fd, &file_info) == -1) {
+        perror("Failed to get file stats");
+        fclose(file);  // Close the file pointer
         return NULL;
     }
-   
-    close(fd);   
-    return path;
 
+    size_t filesize = file_info.st_size;  // Get the file size from fstat
+
+    // allocate memory on the heap for the file contents
+    char *buf = malloc(filesize + 1);
+    if (!buf)
+        error("malloc() failed");
+  
+    size_t items_read = fread(buf, 1, filesize, file);
+    if (items_read != file_size) {
+        if (ferror(file)) {
+            // Error occurred during the fread operation
+            perror("Error reading file");
+        } else if (feof(file)) {
+        // End of file reached before reading the expected number of bytes
+         fprintf(stderr, "Warning: End of file reached, only %zu bytes read out of %zu\n", items_read, file_size);
+    }
+
+    }
+
+    fclose(file);
+    return buf;
 }
 
-void *worker_thread(void *arg){
-    
-    // initialize the ring buffer
-    struct worker_args *args = (struct worker_args *)arg;
-
-    struct search_ring_buffer *ring = args->ring;
-
-    const char *pattern = arg;
-    struct search_job job;
-    struct print_queue queue;
-
-    while(1){ 
-        pthread_mutex_lock(&ring->mutex);
-        while (rb_empty(&search_rb)) {
-            pthread_cond_wait(&ring->has_job_cond, &ring->mutex);
-        }
-        printf("Worker thread started\n");
-        // Dequeue a job from the ring buffer
-        job = rb_dequeue(&search_rb);
-          if (job.file_path == NULL) {
-            pthread_mutex_unlock(&ring->mutex);
-            break;  // Exit when NULL job is dequeued
-        }
-        off_t file_size = job.file_size;
-        char *path = job.file_path;
-        if(path == NULL){
-            perror("invalid");
-            return NULL;
-        }
-         
-        printf("did we get here\n");
-
-        // Read the file 
-        char *read_files = read_file(job.file_path, file_size);
-        if (!read_files) {
-            perror("reading file into buffer failed");
-            return NULL;
-        }
-
-        read_files[file_size] = '\0';
-
-        struct print_queue pq;
-        pq_init(&queue, job.file_path);
-
-        char *line = read_files;
-        int line_number = 1;
-         while (line) {
-            char *next_line = strchr(line, '\n');
-            if (next_line) {
-                *next_line = '\0'; // Temporarily null-terminate the current line
-        }
-        char *match = strstr(read_files, line);
-            if(match){
-              pq_add_tail(&pq, line, match, line_number);
-              printf("Match found in file %s at line %d: %s\n", match, line_number, line);  
-
-        }
-         if (next_line) {
-            *next_line = '\n'; // Restore newline character
-            line = next_line + 1;
-        } else {
-            line = NULL;
-        }
-        line_number++;
-    
-    }
-    if(pq.head != NULL){
-        flockfile(stdout);
-        pq_print(&pq, pattern);
-        funlockfile(stdout);
-    }
-
-    // After processing the job, no need to reassign the file path
-    printf("worker threads ready: received job %s",job.file_path );
-
-    free(read_files);
-
-    // Free the file path memory if it was dynamically allocated
-    if (job.file_path) {
-            free(job.file_path);  // Only free if it was dynamically allocated
-        }
-        pthread_mutex_unlock(&ring->mutex);
-    }
-    return NULL;
-    
-}
-void free_buffer(char *buf, size_t file_size) {
-    free(buf);
+char *search_pattern_in_line(const char *line, const char *pattern) {
+    return strstr(line, pattern);  // Returns pointer to the match or NULL if not found
 }
 
+// Returns void * for pthread_create() signature
 void *search_files(void *arg) {
     const char *pattern = arg;
     uint64_t found_match = 0;
-    for (;;) {
+
+    while(1) {
         struct search_job job = rb_dequeue(&search_rb);
 
         off_t file_size = job.file_size;
@@ -347,148 +213,132 @@ void *search_files(void *arg) {
         if (file_path == NULL)
             pthread_exit((void *)found_match);
 
-        char *buf = read_file(file_path, file_size);
+        char *buf = read_file_into_buffer(file_path, file_size);
         if (!buf) {
-            perror("reading file into buffer failed");
-            break;  // Replace goto with break
+            error("error");
+       
         }
 
         buf[file_size] = '\0';
 
         struct print_queue pq;
         pq_init(&pq, file_path);
-
+          // Process the file content line by line
         char *next_line = buf;
-        char *line = NULL;
-        char *saveptr = NULL;  // Save pointer for strtok_r
-
-        line = strtok_r(next_line, "\n", &saveptr);
+        char *line = strtok_r(next_line, "\n", &next_line); // Use strtok_r for thread-safety
 
         int line_num = 1;
-        while (line != NULL) {
-            char *match = strstr(line, pattern);
+        while (line) {
+            char *match = search_pattern_in_line(line, pattern);
+             // Returns pointer to the match or NULL if not found
             if (match) {
                 pq_add_tail(&pq, line, match, line_num);
                 found_match = 1;
             }
 
-            line = strtok_r(NULL, "\n", &saveptr);  // Thread-safe
+            line = strtok_r(next_line, "\n", &next_line); // Move to next line
             line_num++;
         }
-
+        // Print matches
         if (pq.head != NULL) {
             flockfile(stdout);
             pq_print(&pq, pattern);
             funlockfile(stdout);
         }
-
+        // free the path and the buffer
         free(buf);
-        free(file_path);  // Always free file_path at the end of the loop
-    }
-
-    return NULL;  // Ensure the thread exits correctly if the loop ends
-}
-
-
-void create_worker_threads(int num_threads, struct search_ring_buffer *ring, const char *pattern) {
-    pthread_t threads[num_threads];
-    for (int i = 0; i < num_threads; i++) {
-        pthread_create(&threads[i], NULL, worker_thread, (void *)ring);
-    }
-
-    // Wait for all threads to complete
-    for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
+        free(file_path);
     }
 }
-        
+
+/* 
+ * `tranverse_directory` handles different file types, increments counters for regular files 
+ * and directories, and handles errors like permission denial or stat errors.
+ */  
 void traverse_directory(const char *path) {
-    struct dirent *dirp;
+    struct dirent *entry;
     DIR *dp;
     struct stat statbuf;
-    const char *match;
 
     if(lstat(path, &statbuf) < 0){
-        perror("cant stat");
-        return;
+        error("cant stat");
     }
-
     // Construct the full path of the directory
     if((dp = opendir(path)) == NULL){
-       err_msg("can't open");
-       return;
+        error("can't open");
     }
 
-    while ((dirp = readdir(dp)) != NULL){              
-       if(strcmp(dirp->d_name, ".") == 0 || 
-           strcmp(dirp->d_name, "..") == 0) 
+    while ((entry = readdir(dp))) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
+
         // Allocate enough space for the path, a slash, the entry name, and a null byte
-        size_t path_size = (strlen(path) + 1 + strlen(dirp->d_name) + 1) * sizeof(char);
-        char *fullpath = malloc(path_size);
-         if (!fullpath){
-            perror("malloc() failed");
-            continue;
-         }
-        // Construct the full path of the file/directory
-        snprintf(fullpath, path_size, "%s/%s", path, dirp->d_name);
+        size_t path_size = (strlen(path) + 1 + strlen(entry->d_name) + 1) * sizeof(char);
 
-        if (lstat(fullpath, &statbuf) == -1) {
-            perror("lstat");
-            free(fullpath);
-            continue;
-        }
-        if(S_ISDIR(statbuf.st_mode)){
-            traverse_directory(fullpath);
-            free(fullpath);
-        }
-        else if (S_ISREG(statbuf.st_mode)) {
-                printf("Checking file: %s\n", fullpath);
-            if (has_allowed_extension(fullpath)) {
-                printf("Adding file to queue: %s\n", fullpath);
-                rb_enqueue(&search_rb, fullpath, statbuf.st_size);
-                printf("contents %s\n", fullpath);
+        char *full_path = malloc(path_size);
+        if (!full_path)
+            error("malloc() failed");
+
+        snprintf(full_path, path_size, "%s/%s", path, entry->d_name);
+
+        if (lstat(full_path, &statbuf) == -1)
+            error("lstat() failed");
+
+        if (S_ISDIR(statbuf.st_mode)) {
+            traverse_directory(full_path);
+            free(full_path);
+        } else if (S_ISREG(statbuf.st_mode) && statbuf.st_size != 0) {
+            rb_enqueue(&search_rb, full_path, statbuf.st_size);
+            // full_path will be freed by a worker thread
         } else {
-                printf("Skipping file (invalid extension): %s\n", fullpath);
-               
+            free(full_path);
         }
-         free(fullpath);
-        }
-
     }
-        closedir(dp);
+
+    closedir(dp);
 }
-// Worker thread function prototype
-void *worker_thread(void *arg);
-void *search_files(void *ard);
 
-int main(int argc, char **argv){
-    int i, n;
 
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <file_path> <pattern>\n", argv[0]);
-        return 1;
-    
-    } 
-    // char *directory_path = argv[1];  // Can be "."
-    // char *pattern = argv[2];
-    const char *directory_path = argv[1];
-    const char *pattern = argv[2];
+int main(int argc, char **argv) {
+    char *directory_path = ".";
+    char *pattern;
 
-    //uint64_t any_threads_matched = 0;
+    if (argc == 2) {
+        pattern = argv[1];
+        file_print_offset = 2; // Skip "./" prefix if no directory argument
+    } else if (argc == 3) {
+        pattern = argv[1];
+        directory_path = argv[2];
+        file_print_offset = 0; // Print full path if directory argument is given
+    } else {
+        fprintf(stderr, "usage: greptile <pattern> [directory]\n");
+        exit(2);
+    }
+
+    pattern_len = strlen(pattern);
+    colorize = isatty(STDOUT_FILENO);
+    uint64_t any_threads_matched = 0;
 
     rb_init(&search_rb, MAX_FILES);
 
-   
+    pthread_t threads[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, search_files, (void *)pattern);
 
+    // main thread tranverse the directory and 
     traverse_directory(directory_path);
+    for (int i = 0; i < NUM_THREADS; i++)
+        rb_enqueue(&search_rb, NULL, 0);
 
-    create_worker_threads(NUM_THREADS, &search_rb, pattern);
-
-  
+    // Wait for worker threads to finish 
+    for (int i = 0; i < NUM_THREADS; i++) {
+        uint64_t thread_matched = 0;
+        pthread_join(threads[i], (void **)&thread_matched);
+        any_threads_matched |= thread_matched;
+    }
 
     rb_destroy(&search_rb);
 
-   return 0;
+    // Return 0 if any thread found a match, 1 otherwise
+    return any_threads_matched == 0;
 }
-
